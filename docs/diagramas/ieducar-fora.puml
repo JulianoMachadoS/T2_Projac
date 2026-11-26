@@ -1,0 +1,18 @@
+@startuml ieducar-fora
+' cenario 1: i-Educar fora do ar
+participant academico as ac
+participant "i-Educar" as ie
+queue RabbitMQ as mq
+
+loop 3 ciclos
+  ac -> ie : GET turmas (timeout 5 s, retry 1 s, 2 s, 4 s)
+  ie --x ac : sem resposta (~7 s)
+end
+note over ac : circuit breaker ABRE\nnada e publicado
+ac -> ac : proximos ciclos falham na hora
+...30 s depois, i-Educar voltou...
+ac -> ie : chamada de teste (MEIO ABERTO)
+ie --> ac : turmas
+note over ac : circuit breaker FECHA
+ac -> mq : turma.detectada.v1 das turmas novas
+@enduml

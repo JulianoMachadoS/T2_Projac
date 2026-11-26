@@ -1,40 +1,151 @@
-# projarq/
-# ├── docker-compose.yml   (este arquivo: banco próprio + serviço de integração)
-# ├── i-educar/            (incluido abaixo via include)
-# ├── Moodle/              (incluido abaixo via include)
-# └── integration/         (NestJS)
+# T2: integracao i-Educar -> Moodle em microsservicos.
+# Um unico "docker compose up -d" sobe tudo e deixa pronto para usar.
+#
+# T2_Projac/
+# ├── docker-compose.yml        (este arquivo)
+# ├── i-educar/  Moodle/        (incluidos abaixo, sem alteracao)
+# ├── servicos/                 (academico, sincronizacao, plataforma-aprendizagem)
+# └── infra/                    (rabbitmq, gateway, configurador)
 
 include:
   - i-educar/docker-compose.yml
   - Moodle/docker-compose.yml
 
+# tokens e senhas fixos de proposito: trabalho de faculdade, qualquer um roda em casa
+x-rabbitmq-url: &rabbitmq-url amqp://projac:projac@rabbitmq:5672
+
+# tracing distribuido sem codigo: o OpenTelemetry instrumenta http, express, pg e amqplib
+# sozinho e manda os traces para o Jaeger (http://localhost:16686)
+x-tracing: &tracing
+  NODE_OPTIONS: --import @opentelemetry/auto-instrumentations-node/register
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+  OTEL_NODE_ENABLED_INSTRUMENTATIONS: http,express,nestjs-core,pg,amqplib
+
 services:
-  integration-db:
+  # ---------- infraestrutura ----------
+
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    ports:
+      - "15672:15672" # painel: http://localhost:15672 (projac / projac)
+    volumes:
+      - ./infra/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./infra/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      retries: 12
+
+  # painel de tracing: http://localhost:16686
+  jaeger:
+    image: jaegertracing/all-in-one:1.60.0
+    ports:
+      - "16686:16686"
+
+  # roda uma vez: instala o i-Educar e liga a API do Moodle (o que o instalar.sh do T1 fazia)
+  configurador:
+    image: docker:29-cli
+    command: sh /configurador/configurar.sh
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # para rodar comandos nos containers do i-Educar e do Moodle
+      - ./infra/configurador:/configurador:ro
+      - ./dadosIniciais:/dadosIniciais:ro
+    depends_on:
+      - php
+      - postgres
+      - moodle
+
+  # cada servico com estado tem o seu banco; ninguem le o banco do outro
+  academico-db:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: ${INTEGRATION_DB_USER:-integration}
-      POSTGRES_PASSWORD: ${INTEGRATION_DB_PASSWORD:-integration}
-      POSTGRES_DB: ${INTEGRATION_DB_NAME:-integration}
-    ports:
-      - "5433:5432" # 5432 já é usada pelo postgres do i-Educar
+      POSTGRES_USER: academico
+      POSTGRES_PASSWORD: academico
+      POSTGRES_DB: academico
     volumes:
-      - integration_db:/var/lib/postgresql/data
+      - academico_db:/var/lib/postgresql/data
+    healthcheck:
+      test: pg_isready -U academico
+      interval: 5s
+      retries: 12
 
-  integration:
-    build: ./integration
-    env_file: .env
+  sincronizacao-db:
+    image: postgres:17-alpine
     environment:
-      INTEGRATION_DB_HOST: integration-db
-      INTEGRATION_DB_PORT: 5432
-    # modo dev: usa o codigo da pasta integration/ e reinicia sozinho quando um arquivo muda
-    command: npm run start:dev
+      POSTGRES_USER: sincronizacao
+      POSTGRES_PASSWORD: sincronizacao
+      POSTGRES_DB: sincronizacao
     volumes:
-      - ./integration:/app
-      - /app/node_modules # node_modules fica o da imagem, nao o do mac
-    ports:
-      - "3000:3000"
+      - sincronizacao_db:/var/lib/postgresql/data
+    healthcheck:
+      test: pg_isready -U sincronizacao
+      interval: 5s
+      retries: 12
+
+  # ---------- microsservicos ----------
+
+  academico:
+    build: ./servicos/academico
+    restart: unless-stopped
+    environment:
+      <<: *tracing
+      OTEL_SERVICE_NAME: academico
+      DATABASE_URL: postgres://academico:academico@academico-db:5432/academico
+      RABBITMQ_URL: *rabbitmq-url
+      IEDUCAR_URL: http://nginx # nginx = servidor web do i-Educar
+      IEDUCAR_TOKEN: t2projac-ieducar-token
     depends_on:
-      - integration-db
+      academico-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      configurador: { condition: service_completed_successfully }
+
+  sincronizacao:
+    build: ./servicos/sincronizacao
+    restart: unless-stopped
+    environment:
+      <<: *tracing
+      OTEL_SERVICE_NAME: sincronizacao
+      DATABASE_URL: postgres://sincronizacao:sincronizacao@sincronizacao-db:5432/sincronizacao
+      RABBITMQ_URL: *rabbitmq-url
+    depends_on:
+      sincronizacao-db: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+
+  plataforma-aprendizagem:
+    build: ./servicos/plataforma-aprendizagem
+    restart: unless-stopped
+    environment:
+      <<: *tracing
+      OTEL_SERVICE_NAME: plataforma-aprendizagem
+      RABBITMQ_URL: *rabbitmq-url
+      MOODLE_URL: http://moodle:8080
+      MOODLE_TOKEN: t2projacmoodletoken0000000000000
+      MAX_TENTATIVAS: 5
+      # cenarios de falha (ver docs/failure-scenarios.md): desligados por padrao
+      SIMULAR_PERDA_RESPOSTA: ${SIMULAR_PERDA_RESPOSTA:-false}
+      ATRASO_PROCESSAMENTO_MS: ${ATRASO_PROCESSAMENTO_MS:-0}
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      configurador: { condition: service_completed_successfully }
+
+  # ---------- API Gateway (entrada unica) ----------
+
+  api-gateway:
+    image: nginx:1.30-alpine
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./infra/gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - academico
+      - sincronizacao
+      - plataforma-aprendizagem
 
 volumes:
-  integration_db:
+  rabbitmq_data:
+  academico_db:
+  sincronizacao_db:

@@ -1,0 +1,91 @@
+{
+  "users": [
+    {
+      "name": "projac",
+      "password_hash": "bDZDSjn87bSJnr3oOSuI9M+ULCnTdxNn4A78yLJzuR4Eqv2y",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": [
+        "administrator"
+      ]
+    }
+  ],
+  "vhosts": [
+    {
+      "name": "/"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "projac",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "queues": [
+    {
+      "name": "turmas",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-delivery-limit": 20,
+        "x-dead-letter-exchange": "",
+        "x-dead-letter-routing-key": "turmas.dlq"
+      }
+    },
+    {
+      "name": "turmas.dlq",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum"
+      }
+    },
+    {
+      "name": "cursos",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-delivery-limit": 20,
+        "x-dead-letter-exchange": "",
+        "x-dead-letter-routing-key": "cursos.dlq"
+      }
+    },
+    {
+      "name": "cursos.dlq",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum"
+      }
+    },
+    {
+      "name": "resultados",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-delivery-limit": 20,
+        "x-dead-letter-exchange": "",
+        "x-dead-letter-routing-key": "resultados.dlq"
+      }
+    },
+    {
+      "name": "resultados.dlq",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum"
+      }
+    }
+  ]
+}

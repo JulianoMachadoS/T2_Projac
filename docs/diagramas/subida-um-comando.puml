@@ -1,0 +1,22 @@
+@startuml subida-um-comando
+' o que acontece com um unico docker compose up
+start
+:docker compose up -d;
+fork
+  :i-Educar (php, fpm, nginx, postgres)\ne Moodle (mariadb, moodle) sobem;
+  :configurador (roda uma vez):\ninstala o i-Educar + token fixo\nliga a API do Moodle + token fixo;
+fork again
+  :RabbitMQ saudavel\n(carrega filas e DLQs);
+fork again
+  :academico-db e sincronizacao-db\nsaudaveis;
+end fork
+:sobem academico, sincronizacao,\nplataforma-aprendizagem;
+:sobem api-gateway e jaeger;
+:em ate 30 s as turmas viram cursos;
+stop
+note right
+  na segunda vez o configurador
+  ve que ja esta instalado
+  e termina na hora
+end note
+@enduml

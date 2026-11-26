@@ -1,0 +1,16 @@
+@startuml correlation-id
+' o mesmo correlation id aparece nos logs dos 3 servicos
+participant academico as ac
+queue RabbitMQ as mq
+participant sincronizacao as si
+participant "plataforma-\naprendizagem" as pl
+
+ac -> ac : correlationId = 9f2c\n(ou o X-Correlation-ID do gateway)
+ac -> mq : envelope { correlationId: 9f2c, ... }
+note left of ac : {"msg":"turma detectada",\n"correlationId":"9f2c"}
+mq -> si : 9f2c
+note right of si : {"msg":"vinculo criado",\n"correlationId":"9f2c"}
+si -> mq : repassa 9f2c
+mq -> pl : 9f2c
+note right of pl : {"msg":"curso pronto",\n"correlationId":"9f2c"}
+@enduml

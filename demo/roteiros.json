@@ -1,0 +1,172 @@
+{
+  "config": {
+    "gateway": "http://localhost:8000/api",
+    "apiKey": "projac",
+    "moodleToken": "t2projacmoodletoken0000000000000"
+  },
+  "cenarios": {
+    "sincronizacao": {
+      "descricao": "Uma turma nova no i-Educar vira um curso no Moodle (caminho feliz)",
+      "passos": [
+        {
+          "legenda": "1. Os 3 servicos estao no ar (health pelo API Gateway)",
+          "http": "GET /academico/health",
+          "pausa": 2
+        },
+        { "http": "GET /sincronizacao/health", "pausa": 2 },
+        { "http": "GET /plataforma/health", "pausa": 2 },
+        {
+          "legenda": "2. Criar uma turma nova no i-Educar",
+          "comando": "docker compose exec -T php php artisan tinker --execute='$t = App\\Models\\LegacySchoolClass::find(3)->replicate(); $t->nm_turma = \"Turma Demo Ao Vivo\"; $t->save(); echo $t->cod_turma;'",
+          "guardar": "turma"
+        },
+        {
+          "legenda": "3. Pedir a deteccao agora pelo gateway (sem esperar os 30 s)",
+          "http": "POST /academico/deteccoes",
+          "correlationId": "demo-{{turma}}",
+          "pausa": 3
+        },
+        {
+          "legenda": "4. A turma {{turma}} no i-Educar",
+          "abrir": "http://localhost/login",
+          "preencher": { "#login": "admin", "#password": "123456789" },
+          "clicar": "#form-login-submit"
+        },
+        { "abrir": "http://localhost/intranet/educar_turma_det.php?cod_turma={{turma}}", "pausa": 4 },
+        {
+          "legenda": "5. Vinculo da turma {{turma}}: esperar ficar CRIADO",
+          "http": "GET /sincronizacao/vinculos",
+          "encontrar": { "turmaId": "{{turma}}" },
+          "esperar": { "status": "CRIADO" },
+          "ate": 60,
+          "guardar": { "curso": "cursoId" },
+          "pausa": 3
+        },
+        {
+          "legenda": "6. No Moodle existe 1 curso so com idnumber ieducar-turma-{{turma}}",
+          "http": "GET http://localhost:8080/webservice/rest/server.php?wstoken={{moodleToken}}&wsfunction=core_course_get_courses_by_field&moodlewsrestformat=json&field=idnumber&value=ieducar-turma-{{turma}}",
+          "lista": "courses",
+          "encontrar": { "idnumber": "ieducar-turma-{{turma}}" },
+          "quantidade": 1,
+          "esperar": { "id": "{{curso}}" },
+          "pausa": 3
+        },
+        {
+          "legenda": "7. O curso {{curso}} no Moodle: Course ID number = ieducar-turma-{{turma}}",
+          "abrir": "http://localhost:8080/login/index.php",
+          "preencher": { "#username": "user", "#password": "bitnami" },
+          "clicar": "#loginbtn"
+        },
+        { "abrir": "http://localhost:8080/course/edit.php?id={{curso}}", "destacar": "#id_idnumber", "pausa": 5 },
+        {
+          "legenda": "8. Os 3 servicos registraram a turma {{turma}} com o mesmo correlationId",
+          "comando": "docker compose logs academico sincronizacao plataforma-aprendizagem 2>/dev/null | grep -E '\"turmaId\":{{turma}}[,}]' | cut -c1-230",
+          "exibir": true,
+          "pausa": 6
+        },
+        {
+          "legenda": "9. A deteccao virou um trace so no Jaeger, passando pelos 3 servicos",
+          "http": "GET http://localhost:16686/api/traces?service=academico&operation=POST&lookback=15m&limit=1",
+          "lista": "data",
+          "encontrar": {},
+          "ate": 30,
+          "guardar": { "trace": "traceID" },
+          "exibir": false
+        },
+        { "abrir": "http://localhost:16686/trace/{{trace}}", "pausa": 8 },
+        { "legenda": "OK: turma {{turma}} virou o curso {{curso}}, sem duplicar", "pausa": 3 }
+      ],
+      "limpeza": [
+        { "comando": "docker compose exec -T php php artisan tinker --execute='App\\Models\\LegacySchoolClass::find({{turma}})?->delete();'", "seTiver": "turma" },
+        { "comando": "docker compose exec -T -u daemon moodle php -r 'define(\"CLI_SCRIPT\", true); require \"/opt/bitnami/moodle/config.php\"; require_once $CFG->dirroot.\"/course/lib.php\"; delete_course({{curso}}, false);'", "seTiver": "curso" },
+        { "comando": "docker compose exec -T sincronizacao-db psql -U sincronizacao -qtA -c 'delete from vinculo_turma_curso where turma_id = {{turma}}'", "seTiver": "turma" },
+        { "comando": "docker compose exec -T academico-db psql -U academico -qtA -c 'delete from turma_detectada where turma_id = {{turma}}'", "seTiver": "turma" }
+      ]
+    },
+
+    "moodle-fora": {
+      "descricao": "Moodle fora do ar: 5 tentativas, DLQ, FALHOU; Moodle volta, reprocessa e cria 1 curso so",
+      "passos": [
+        {
+          "http": "GET http://localhost:15672/api/queues/%2F/cursos.dlq",
+          "usuario": "projac:projac",
+          "guardar": { "dlqAntes": "messages" },
+          "exibir": false
+        },
+        {
+          "legenda": "1. Derrubar o Moodle",
+          "comando": "docker compose stop moodle && docker compose ps -a moodle --format '{{.Service}}: {{.State}}'",
+          "exibir": true,
+          "pausa": 3
+        },
+        {
+          "legenda": "2. Criar uma turma nova no i-Educar e pedir a deteccao",
+          "comando": "docker compose exec -T php php artisan tinker --execute='$t = App\\Models\\LegacySchoolClass::find(3)->replicate(); $t->nm_turma = \"Turma Demo Moodle Fora\"; $t->save(); echo $t->cod_turma;'",
+          "guardar": "turma"
+        },
+        { "http": "POST /academico/deteccoes", "correlationId": "demo-fora-{{turma}}", "pausa": 3 },
+        {
+          "legenda": "3. Moodle fora: o vinculo fica PENDENTE enquanto o servico tenta (5 entregas, ~75 s)",
+          "http": "GET /sincronizacao/vinculos",
+          "encontrar": { "turmaId": "{{turma}}" },
+          "esperar": { "status": "FALHOU" },
+          "ate": 180,
+          "pausa": 3
+        },
+        {
+          "legenda": "4. Na 5a entrega a mensagem foi para a DLQ: cursos.dlq tinha {{dlqAntes}}, agora tem mais uma",
+          "http": "GET http://localhost:15672/api/queues/%2F/cursos.dlq",
+          "usuario": "projac:projac",
+          "esperar": { "messages": ">{{dlqAntes}}" },
+          "ate": 20,
+          "mostrar": ["name", "messages", "type"],
+          "pausa": 5
+        },
+        {
+          "legenda": "5. Religar o Moodle e esperar responder",
+          "comando": "docker compose start moodle"
+        },
+        { "http": "GET http://localhost:8080/login/index.php", "ate": 300, "exibir": false },
+        {
+          "legenda": "6. Reprocessar a turma {{turma}} pelo gateway",
+          "http": "POST /sincronizacao/vinculos/{{turma}}/reprocessar",
+          "correlationId": "demo-fora-{{turma}}",
+          "pausa": 3
+        },
+        {
+          "legenda": "7. Vinculo da turma {{turma}}: agora CRIADO",
+          "http": "GET /sincronizacao/vinculos",
+          "encontrar": { "turmaId": "{{turma}}" },
+          "esperar": { "status": "CRIADO" },
+          "ate": 90,
+          "guardar": { "curso": "cursoId" },
+          "pausa": 3
+        },
+        {
+          "legenda": "8. No Moodle existe 1 curso so para a turma {{turma}}",
+          "http": "GET http://localhost:8080/webservice/rest/server.php?wstoken={{moodleToken}}&wsfunction=core_course_get_courses_by_field&moodlewsrestformat=json&field=idnumber&value=ieducar-turma-{{turma}}",
+          "lista": "courses",
+          "encontrar": { "idnumber": "ieducar-turma-{{turma}}" },
+          "quantidade": 1,
+          "esperar": { "id": "{{curso}}" },
+          "pausa": 3
+        },
+        {
+          "legenda": "9. O curso {{curso}} no Moodle: Course ID number = ieducar-turma-{{turma}}",
+          "abrir": "http://localhost:8080/login/index.php",
+          "preencher": { "#username": "user", "#password": "bitnami" },
+          "clicar": "#loginbtn"
+        },
+        { "abrir": "http://localhost:8080/course/edit.php?id={{curso}}", "destacar": "#id_idnumber", "pausa": 5 },
+        { "legenda": "OK: Moodle caiu, nada se perdeu e nao duplicou (turma {{turma}} -> curso {{curso}})", "pausa": 3 }
+      ],
+      "limpeza": [
+        { "comando": "docker compose start moodle" },
+        { "comando": "docker compose exec -T php php artisan tinker --execute='App\\Models\\LegacySchoolClass::find({{turma}})?->delete();'", "seTiver": "turma" },
+        { "comando": "docker compose exec -T -u daemon moodle php -r 'define(\"CLI_SCRIPT\", true); require \"/opt/bitnami/moodle/config.php\"; require_once $CFG->dirroot.\"/course/lib.php\"; delete_course({{curso}}, false);'", "seTiver": "curso" },
+        { "comando": "docker compose exec -T sincronizacao-db psql -U sincronizacao -qtA -c 'delete from vinculo_turma_curso where turma_id = {{turma}}'", "seTiver": "turma" },
+        { "comando": "docker compose exec -T academico-db psql -U academico -qtA -c 'delete from turma_detectada where turma_id = {{turma}}'", "seTiver": "turma" }
+      ]
+    }
+  }
+}

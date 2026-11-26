@@ -1,0 +1,29 @@
+@startuml sequencia
+' fluxo normal: turma nova no i-Educar ate o curso no Moodle
+participant "i-Educar" as ie
+participant academico as ac
+queue RabbitMQ as mq
+participant sincronizacao as si
+participant "plataforma-\naprendizagem" as pl
+participant Moodle as mo
+
+ac -> ie : GET /api/school-class (a cada 30 s)
+ie --> ac : turmas ativas
+ac -> ac : turma ja detectada? pula
+ac -> mq : academico.turma.detectada.v1\n(correlationId novo)
+ac -> ac : grava turma_detectada
+mq -> si : entrega
+si -> si : vinculo CRIADO? ignora\nsenao grava PENDENTE
+si -> mq : plataforma.curso.criar.v1
+si --> mq : ack
+mq -> pl : entrega
+pl -> mo : busca curso pelo idnumber
+mo --> pl : nao existe
+pl -> mo : core_course_create_courses
+mo --> pl : cursoId
+pl -> mq : plataforma.curso.criado.v1
+pl --> mq : ack
+mq -> si : entrega
+si -> si : vinculo CRIADO + cursoId
+si --> mq : ack
+@enduml

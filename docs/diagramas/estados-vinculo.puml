@@ -1,0 +1,8 @@
+@startuml estados-vinculo
+' estados do vinculo turma-curso (servico sincronizacao)
+[*] --> PENDENTE : turma.detectada.v1\n(envia curso.criar.v1)
+PENDENTE --> CRIADO : curso.criado.v1
+PENDENTE --> FALHOU : curso.falhou.v1\n(5 tentativas, mensagem na DLQ)
+FALHOU --> PENDENTE : POST /vinculos/:turmaId/reprocessar
+CRIADO --> CRIADO : turma.detectada.v1 repetido\n(ignorado: idempotente)
+@enduml

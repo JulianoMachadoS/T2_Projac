@@ -1,5 +1,5 @@
 @echo off
-rem Instalador para Windows: roda o instalar.sh usando o bash que vem com o Git para Windows.
+rem Instalador para Windows: roda o instalar.sh (que sobe o T2) usando o bash que vem com o Git para Windows.
 rem Basta dar duplo clique neste arquivo (o Docker Desktop precisa estar aberto).
 
 cd /d "%~dp0"

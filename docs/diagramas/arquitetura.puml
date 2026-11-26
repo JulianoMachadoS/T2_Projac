@@ -1,0 +1,49 @@
+@startuml arquitetura
+' visao geral do T2
+skinparam componentStyle rectangle
+left to right direction
+
+actor "Usuario / professor" as cliente
+
+node "Sistemas externos (sem alteracao)" {
+  [i-Educar] as ieducar
+  [Moodle] as moodle
+}
+
+[API Gateway\nnginx :8000] as gw
+
+node "Integracao T2 (docker compose)" {
+  [academico] as acad
+  database "academico-db" as acaddb
+  [sincronizacao] as sinc
+  database "sincronizacao-db" as sincdb
+  [plataforma-aprendizagem] as plat
+  queue "RabbitMQ\nfilas: turmas, cursos, resultados\n+ DLQs" as mq
+  [Jaeger\n(tracing)] as jaeger
+}
+
+cliente --> gw : REST + X-Api-Key
+gw --> acad : /api/academico
+gw --> sinc : /api/sincronizacao
+gw --> plat : /api/plataforma
+
+acad --> ieducar : REST (polling 30 s)\ntimeout, retry, circuit breaker
+acad -- acaddb
+acad ..> mq : turma.detectada.v1
+mq ..> sinc : turma.detectada.v1
+sinc -- sincdb
+sinc ..> mq : curso.criar.v1
+mq ..> plat : curso.criar.v1
+plat --> moodle : REST\ntimeout, retry
+plat ..> mq : curso.criado.v1 /\ncurso.falhou.v1
+mq ..> sinc : curso.criado.v1 /\ncurso.falhou.v1
+acad .[#gray].> jaeger
+sinc .[#gray].> jaeger
+plat .[#gray].> jaeger
+
+legend right
+  linha cheia = sincrono (HTTP)
+  tracejada = assincrono (RabbitMQ)
+  cinza = traces (OpenTelemetry)
+endlegend
+@enduml

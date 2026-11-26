@@ -1,4 +1,5 @@
 codigo morto/
+codigo morto.zip
 
 # .env guarda os tokens do i-Educar e do Moodle, nao pode ir pro repositorio
 # use o .env.example como modelo
@@ -6,3 +7,7 @@ codigo morto/
 
 # arquivo que o Finder do Mac cria sozinho
 .DS_Store
+
+# T2: dependencias e build dos microsservicos (gerados no docker build)
+node_modules/
+dist/

@@ -1,0 +1,24 @@
+@startuml retry-dlq
+' cenario 2: Moodle fora do ar
+queue "cursos\n(fila quorum)" as fila
+participant "plataforma-\naprendizagem" as pl
+participant Moodle as mo
+queue "cursos.dlq" as dlq
+participant sincronizacao as si
+
+loop tentativas 1 a 4 (x-delivery-count)
+  fila -> pl : curso.criar.v1
+  pl -> mo : 3 chamadas com backoff (2 s, 4 s, 8 s)
+  mo --x pl : erro / timeout
+  pl -> fila : nack com requeue (volta para a fila)
+end
+alt Moodle voltou
+  fila -> pl : curso.criar.v1
+  pl -> mo : cria (ou acha pelo idnumber)
+  pl -> si : curso.criado.v1
+else 5a tentativa falhou
+  pl -> si : curso.falhou.v1
+  pl -> dlq : nack sem requeue (dead-letter)
+  si -> si : vinculo FALHOU\n(reprocessar pela API)
+end
+@enduml

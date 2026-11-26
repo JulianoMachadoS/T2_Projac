@@ -32,9 +32,11 @@ foreach ($functions as $function) {
 // token do admin, assim nao precisa criar usuario nem permissao
 $admin = get_admin();
 \core\session\manager::set_user($admin);
-$token = $DB->get_field('external_tokens', 'token', ['userid' => $admin->id, 'externalserviceid' => $service->id]);
-if (!$token) {
-    $token = \core_external\util::generate_token(EXTERNAL_TOKEN_PERMANENT, $service, $admin->id, context_system::instance());
+// token fixo: e trabalho de faculdade, assim qualquer um roda sem copiar token
+$token = 't2projacmoodletoken0000000000000';
+if (!$DB->record_exists('external_tokens', ['token' => $token])) {
+    $gerado = \core_external\util::generate_token(EXTERNAL_TOKEN_PERMANENT, $service, $admin->id, context_system::instance());
+    $DB->set_field('external_tokens', 'token', $token, ['token' => $gerado]);
 }
 
 echo $token . "\n";

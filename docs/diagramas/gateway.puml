@@ -1,0 +1,15 @@
+@startuml gateway
+' API Gateway: so funcoes de borda, sem regra de negocio
+actor Cliente
+participant "api-gateway\n(nginx)" as gw
+participant sincronizacao as si
+
+Cliente -> gw : GET /api/sincronizacao/vinculos\nX-Api-Key: projac
+gw -> gw : confere X-Api-Key (senao 401)
+gw -> gw : rate limit 10 req/s (senao 429)
+gw -> gw : cria X-Correlation-ID se faltar
+gw -> si : GET /vinculos + X-Correlation-ID
+si --> gw : 200 JSON
+gw -> gw : log de acesso em JSON
+gw --> Cliente : 200 JSON + X-Correlation-ID
+@enduml

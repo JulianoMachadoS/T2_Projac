@@ -1,0 +1,22 @@
+@startuml hexagonal-servico
+' por dentro de cada servico continua hexagonal (exemplo: sincronizacao)
+skinparam componentStyle rectangle
+
+package "servico sincronizacao" {
+  package "entrada" {
+    [VinculosController\nHTTP (MVC) + @EventPattern] as ctrl
+  }
+  package "nucleo" {
+    [VinculosService\nregra turma -> curso] as svc
+  }
+  package "saida (adaptadores)" {
+    [Repository<Vinculo>\n(TypeORM)] as repo
+    [ClientProxy\n(Nest RMQ)] as cli
+  }
+}
+ctrl --> svc
+svc --> repo
+svc --> cli
+repo --> [sincronizacao-db]
+cli --> [RabbitMQ]
+@enduml

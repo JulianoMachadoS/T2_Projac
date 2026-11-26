@@ -1,0 +1,35 @@
+@startuml t1-para-t2
+' cada modulo do monolito do T1 virou um servico no T2
+skinparam componentStyle rectangle
+left to right direction
+
+package "T1: monolito modular\n(arquivos T1/integration)" {
+  [modulo academico] as m1
+  [modulo sincronizacao] as m2
+  [modulo plataforma-aprendizagem] as m3
+  database "integration-db" as db1
+  m2 --> m1 : chamada de metodo
+  m2 --> m3 : chamada de metodo
+  m2 -- db1
+}
+
+package "T2: microsservicos\n(servicos/)" {
+  [academico] as s1
+  database "academico-db" as d1
+  [sincronizacao] as s2
+  database "sincronizacao-db" as d2
+  [plataforma-aprendizagem] as s3
+  queue RabbitMQ as mq
+  s1 -- d1
+  s2 -- d2
+  s1 ..> mq
+  mq ..> s2
+  s2 ..> mq
+  mq ..> s3
+  s3 ..> mq
+}
+
+m1 ==> s1 : extraido
+m2 ==> s2 : extraido
+m3 ==> s3 : extraido
+@enduml

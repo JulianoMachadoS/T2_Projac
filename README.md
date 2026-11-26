@@ -1,136 +1,172 @@
-# T1 – Integração i-Educar + Moodle
+# T2 – Integração i-Educar → Moodle em microsserviços
 
 **Autores:** Juliano Machado da Silva e João Pedro Madruga
+
+O T2 é a continuação do T1. A mesma integração (cada turma ativa do i-Educar vira um curso no Moodle) saiu de um monólito modular e virou **3 microsserviços que se comunicam por mensagens** (RabbitMQ). O sistema tolera falhas e pode ser observado em execução.
+
+![Arquitetura do T2](docs/diagramas/arquitetura.png)
+
+| Documento | Conteúdo |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Serviços, catálogo de eventos, filas e comparação com o T1 |
+| [docs/adr/](docs/adr/) | Decisões: decomposição, comunicação, resiliência, stack e API Gateway |
+| [docs/failure-scenarios.md](docs/failure-scenarios.md) | Os 4 cenários de falha e como reproduzir cada um |
+| [arquivos T1/](arquivos%20T1/) | Tudo do T1: README, enunciado, relatório, Resumo das Escolhas Arquiteturais e o monólito (`integration/`) |
 
 ## Como rodar
 
 Pré-requisito: Docker com Docker Compose.
 
 ```bash
-./instalar.sh
+docker compose up -d
 ```
 
-**No Windows:** com o Docker Desktop aberto, dê duplo clique em `instalar.bat`. Ele usa o terminal que vem com o Git para Windows, sem precisar instalar mais nada. Os outros comandos deste README podem ser rodados no **Git Bash**.
+Esse único comando sobe tudo: i-Educar, Moodle, RabbitMQ, os bancos, os 3 serviços, o API Gateway e o Jaeger.
 
-## O que o comando faz
+- O container `configurador` roda uma vez: instala o i-Educar com dados de exemplo e liga a API do Moodle.
+- **Na primeira vez leva alguns minutos** (build das imagens e instalação do Moodle). Nas seguintes, segundos.
+- Para acompanhar: `docker compose ps` (os serviços ficam `healthy`) ou `docker compose logs -f configurador`.
+- Atalho opcional: `./instalar.sh` (no Windows, duplo clique em `instalar.bat`) faz o mesmo `docker compose up` e espera tudo responder.
 
-1. Cria o arquivo `.env` com as configurações.
-2. Sobe os três sistemas com Docker: i-Educar, Moodle e o serviço de integração.
-3. Instala o i-Educar e cria dados de exemplo (escolas, turmas e alunos).
-4. Ativa a API (Web Services) do Moodle.
-5. Gera os tokens de acesso do i-Educar e do Moodle e grava no `.env`.
+Em até 30 segundos depois de subir, as turmas de exemplo do i-Educar já aparecem como cursos no Moodle.
 
-A primeira execução leva alguns minutos. Depois, para subir o ambiente de novo, basta `docker compose up -d`.
+### Conferir se está funcionando
+
+1. `docker compose ps`: o `configurador` aparece como `Exited (0)`, e `academico`, `sincronizacao` e `plataforma-aprendizagem` como `healthy`.
+2. `curl -H "X-Api-Key: projac" http://localhost:8000/api/sincronizacao/vinculos`: as turmas aparecem com `"status":"CRIADO"`.
+3. Moodle em http://localhost:8080 (`user` / `bitnami`) → **Site administration → Courses → Manage courses and categories**: os cursos estão lá.
+4. `./testar-integracao.sh`: cria uma turma, espera o curso aparecer, confere e apaga o que criou. Termina com `OK`.
+
+Se algo não subir, `docker compose logs configurador` mostra em que passo a instalação parou.
 
 ## Acessos
 
-Os usuários já vêm criados pela instalação, não é preciso cadastrar.
+Tokens e senhas são fixos de propósito: é um trabalho acadêmico para rodar em qualquer máquina.
 
-| Sistema    | Endereço              | Login   | Senha       |
-|------------|-----------------------|---------|-------------|
-| i-Educar   | http://localhost      | `admin` | `123456789` |
-| Moodle     | http://localhost:8080 | `user`  | `bitnami`   |
-| Integração | `POST http://localhost:3000/sincronizacao/turmas` | — | — |
+| O quê | Endereço | Login / chave |
+|---|---|---|
+| i-Educar | http://localhost | `admin` / `123456789` |
+| Moodle | http://localhost:8080 | `user` / `bitnami` |
+| API Gateway | http://localhost:8000/api/... | cabeçalho `X-Api-Key: projac` |
+| RabbitMQ (painel das filas) | http://localhost:15672 | `projac` / `projac` |
+| Jaeger (tracing) | http://localhost:16686 | — |
 
-Os dois logins são de administrador.
+### Rotas pelo gateway
 
-## Passo a passo: criar uma turma no i-Educar e vê-la no Moodle
+| Rota | Para quê |
+|---|---|
+| `POST /api/academico/deteccoes` | Procurar turmas novas agora, sem esperar os 30 s |
+| `GET /api/sincronizacao/vinculos` | Ver cada turma e o estado do curso (`PENDENTE`, `CRIADO`, `FALHOU`) |
+| `POST /api/sincronizacao/vinculos/:turmaId/reprocessar` | Tentar de novo uma turma que falhou |
+| `GET /api/{academico,sincronizacao,plataforma}/health` | Health check de cada serviço |
+| `GET /api/{academico,sincronizacao,plataforma}/metrics` | Métricas (formato Prometheus) |
 
-**1. Baixar e instalar** (no Terminal do Mac, com o Docker Desktop aberto):
+## Roteiro: uma sincronização completa
 
-```bash
-git clone https://github.com/JulianoMachadoS/T1_Projac.git
-cd T1_Projac
-./instalar.sh
-```
+![Sequência de uma sincronização](docs/diagramas/sequencia.png)
 
-Espere aparecer **"Pronto!"** no final (a primeira vez leva alguns minutos).
+**1. Criar uma turma no i-Educar.** Entre em http://localhost (`admin` / `123456789`) e vá em **Escola → Cadastros → Turmas → Novo**. Exemplo que funciona com os dados de exemplo:
 
-**2. Entrar no i-Educar.** Abra http://localhost no navegador e entre com `admin` / `123456789`.
-
-**3. Abrir o cadastro de turmas.** No menu, clique em **Escola → Cadastros → Turmas** (ou abra direto http://localhost/intranet/educar_turma_lst.php). Na lista de turmas, clique em **Novo**.
-
-**4. Preencher a turma.** Exemplo que funciona com os dados que já vêm instalados:
-
-| Campo | O que escolher |
+| Campo | Valor |
 |---|---|
 | Ano | o ano atual |
-| Instituição | Prefeitura Municipal de Modelópolis |
-| Escola | Escola de Ensino Fundamental |
-| Curso | Ensino Fundamental |
+| Instituição / Escola / Curso | Prefeitura Municipal de Modelópolis / Escola de Ensino Fundamental / Ensino Fundamental |
 | Série | 2º ano |
 | Tipo de turma | Regular |
-| Nome da turma | um nome fácil de achar, ex.: `Turma do Professor` |
+| Nome da turma | `Turma do Professor` |
 | Máximo de alunos | 25 |
 | Turno | Integral |
-| Ativo | deixe **marcado** |
+| Ativo | marcado |
 
-Os campos com asterisco (*) são obrigatórios; os outros podem ficar em branco. A turma precisa ser do **ano atual** e estar **ativa**, senão a integração não a sincroniza.
+A turma precisa ser **do ano atual** e estar **ativa**.
 
-**5. Salvar.** Clique em **Salvar** no fim do formulário. A turma aparece na lista de turmas.
-
-**6. Esperar até 1 minuto.** A integração roda sozinha a cada minuto. Para não esperar, rode no Terminal, dentro da pasta `T1_Projac`:
+**2. Disparar a detecção** (ou esperar até 30 s):
 
 ```bash
-curl -X POST http://localhost:3000/sincronizacao/turmas
+curl -X POST -H "X-Api-Key: projac" -H "X-Correlation-ID: demo-1" http://localhost:8000/api/academico/deteccoes
 ```
 
-A resposta deve mostrar `"cursosCriados":1`.
+A resposta mostra `"novas":1`.
 
-**7. Ver o curso no Moodle.** Abra http://localhost:8080 e entre com `user` / `bitnami`. No menu do topo, clique em **Site administration → Courses → Manage courses and categories** e depois em **Category 1** (ou abra direto http://localhost:8080/course/index.php?categoryid=1). O curso aparece com o **mesmo nome da turma**. Ao abrir o curso, em *Settings*, o campo **Course ID number** mostra `ieducar-turma-<código da turma>`, que indica de qual turma ele veio.
+**3. Ver o vínculo criado:**
 
-## O que foi integrado
+```bash
+curl -H "X-Api-Key: projac" http://localhost:8000/api/sincronizacao/vinculos
+```
 
-**Turmas do i-Educar → cursos do Moodle.** Quando uma turma ativa do ano atual é criada no i-Educar, a integração cria o curso correspondente no Moodle e grava o vínculo entre os dois (id da turma ↔ id do curso) no banco próprio. A sincronização roda sozinha a cada minuto e também pode ser disparada pelo endpoint acima.
+A turma aparece com `"status":"CRIADO"` e o `cursoId` do Moodle.
 
-| Turma no i-Educar | Curso no Moodle |
+**4. Ver o curso no Moodle.** Entre em http://localhost:8080 (`user` / `bitnami`) → **Site administration → Courses → Manage courses and categories → Category 1**. O curso tem o mesmo nome da turma, e o **Course ID number** é `ieducar-turma-<código da turma>`.
+
+**5. Seguir a sincronização pelos 3 serviços:**
+
+```bash
+docker compose logs academico sincronizacao plataforma-aprendizagem | grep demo-1
+```
+
+As linhas dos 3 serviços têm o mesmo `correlationId`. No Jaeger (http://localhost:16686), o mesmo caminho aparece como um trace só.
+
+**Teste automático do mesmo roteiro:** `./testar-integracao.sh` cria uma turma, espera o curso, confere tudo e apaga o que criou.
+
+## Demonstração no navegador (teste de sistema)
+
+A pasta `demo/` repete os roteiros abrindo o Chrome. Cada passo aparece na tela com uma legenda e o resultado é conferido. Os passos ficam descritos em `demo/roteiros.json`: abrir página, fazer login, chamar a API, rodar um comando e esperar um estado. Para mudar a demonstração, basta editar o JSON.
+
+Pré-requisitos: Node.js 20+ e Google Chrome (sem o Chrome, rode `npx playwright install chromium`).
+
+```bash
+cd demo
+npm install
+node demo.mjs                          # lista os cenários
+node demo.mjs sincronizacao            # turma nova vira curso (~1 min)
+node demo.mjs moodle-fora              # Moodle cai, DLQ, reprocessamento (~2 min)
+node demo.mjs sincronizacao --passo    # espera Enter antes de cada passo (apresentação)
+```
+
+| Cenário | O que mostra e confere |
 |---|---|
-| Nome da turma | Nome do curso |
-| Código da turma (ex.: 23) | Nome curto `turma-23` e código `ieducar-turma-23` |
+| `sincronizacao` | Health dos 3 serviços → turma criada no i-Educar → detecção pelo gateway → vínculo `CRIADO` → 1 curso só no Moodle com o mesmo id → logs dos 3 serviços com o mesmo `correlationId` → trace no Jaeger |
+| `moodle-fora` | Moodle parado → vínculo `PENDENTE` durante as 5 entregas → `FALHOU` e mais uma mensagem na `cursos.dlq` → Moodle de volta → reprocessar → `CRIADO` e 1 curso só |
 
-Alunos, professores e notas não são sincronizados: ficam só no i-Educar.
+No terminal sai `✔`/`✘` por passo e `RESULTADO: OK` ou `FALHOU`. O código de saída também indica o resultado. O passo a passo de cada cenário, com os comandos, está em [demo/README.md](demo/README.md). No fim, cada cenário apaga a turma, o curso e os registros que criou, e o `moodle-fora` sempre religa o Moodle. Os comandos usam `sh`: no Windows, rode pelo Git Bash ou pelo WSL.
 
-## O que dá para fazer
+## Cenários de falha
 
-| Onde | O que fazer |
+Os 4 cenários pedidos estão em [docs/failure-scenarios.md](docs/failure-scenarios.md). Resumo:
+
+| Cenário | Como provocar |
 |---|---|
-| i-Educar | Cadastrar e consultar escolas, turmas, alunos e matrículas. Já vem com 2 escolas, 21 turmas e 210 alunos de exemplo. Turmas novas viram cursos no Moodle. |
-| Moodle | Ver os cursos criados pela integração, um por turma, em *Category 1*. |
-| Integração | Disparar a sincronização na hora e consultar o vínculo turma ↔ curso e o histórico de cada execução (ver "Como testar"). |
+| 1. i-Educar fora do ar | `docker compose stop nginx` |
+| 2. Moodle fora do ar | `docker compose stop moodle` |
+| 3. Moodle cria o curso, mas a resposta não chega | `SIMULAR_PERDA_RESPOSTA=true docker compose up -d plataforma-aprendizagem` |
+| 4. Serviço reinicia no meio | `ATRASO_PROCESSAMENTO_MS=20000 docker compose up -d plataforma-aprendizagem` + `docker compose kill plataforma-aprendizagem` |
 
-## Como testar
+## Estrutura do repositório
 
-**1. Ver os cursos criados.** Depois da instalação, espere 1 minuto, entre no Moodle e abra *Site administration > Courses > Manage courses and categories* (http://localhost:8080/course/management.php). As 21 turmas de exemplo do i-Educar aparecem como cursos (nome curto `turma-<id>`).
+```
+T2_Projac/
+├── docker-compose.yml        # sobe tudo (inclui i-Educar e Moodle)
+├── servicos/                 # os 3 microsserviços (NestJS)
+│   ├── academico/
+│   ├── sincronizacao/
+│   └── plataforma-aprendizagem/
+├── infra/
+│   ├── rabbitmq/             # filas e DLQs declaradas
+│   ├── gateway/nginx.conf    # API Gateway
+│   └── configurador/         # instalação automática do i-Educar e do Moodle
+├── dadosIniciais/            # configuração dos Web Services do Moodle
+├── docs/                     # arquitetura, ADRs, cenários de falha, diagramas UML
+├── demo/                     # demonstração no navegador (roteiros.json + Playwright)
+├── arquivos T1/              # documentos e código do T1 (referência)
+├── i-educar/  Moodle/        # sistemas externos (sem alteração)
+└── instalar.sh / instalar.bat / testar-integracao.sh
+```
 
-**2. Disparar a sincronização na hora.**
+## Parar e recomeçar
 
 ```bash
-curl -X POST http://localhost:3000/sincronizacao/turmas
+docker compose down        # para tudo e mantém os dados
+docker compose down -v     # para tudo e apaga os dados (a próxima subida instala do zero)
 ```
 
-Resposta esperada, quando todas as turmas já têm curso:
-
-```json
-{"totalTurmas":21,"cursosCriados":0,"turmasIgnoradas":21,"falhas":[]}
-```
-
-**3. Criar uma turma e ver o curso aparecer.** Siga o "Passo a passo" acima.
-
-**4. Teste de ponta a ponta automático.** Cria uma turma no i-Educar, sincroniza, confere o curso no Moodle e o vínculo no banco, e apaga o que criou:
-
-```bash
-./testar-integracao.sh
-```
-
-**5. Testes automatizados do código** (não precisam do i-Educar nem do Moodle):
-
-```bash
-docker compose exec integration npm test
-```
-
-**6. Ver o vínculo e o histórico no banco da integração.**
-
-```bash
-docker compose exec integration-db psql -U integration -c "select * from vinculo_turma_curso"
-docker compose exec integration-db psql -U integration -c "select * from historico_sincronizacao order by id desc limit 5"
-```
+**Observação:** o compose do i-Educar usa nomes fixos de container (`ieducar-php`, `ieducar-nginx`...). Se o ambiente do T1 estiver rodando na mesma máquina, pare-o antes (`docker compose down` na pasta do T1).

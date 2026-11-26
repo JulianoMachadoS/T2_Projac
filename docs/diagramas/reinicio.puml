@@ -1,0 +1,14 @@
+@startuml reinicio
+' cenario 4: servico reinicia no meio do processamento
+queue "cursos" as mq
+participant "plataforma-\naprendizagem" as pl
+
+mq -> pl : curso.criar.v1\n(fica unacked)
+pl -> pl : processando...
+destroy pl
+note over mq : conexao caiu sem ack:\nmensagem volta para ready
+create participant "plataforma-\naprendizagem\n(religado)" as pl2
+mq -> pl2 : mesma mensagem
+pl2 -> pl2 : busca pelo idnumber (idempotente)
+pl2 -> mq : curso.criado.v1 + ack
+@enduml

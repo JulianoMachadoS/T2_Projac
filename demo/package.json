@@ -1,0 +1,13 @@
+{
+  "name": "demo",
+  "version": "1.0.0",
+  "description": "Demonstracao ao vivo do T2 no navegador, guiada por roteiros.json",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo": "node demo.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.65.1"
+  }
+}

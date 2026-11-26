@@ -1,0 +1,12 @@
+@startuml circuit-breaker
+' estados do circuit breaker do i-Educar (opossum)
+[*] --> Fechado
+Fechado : chamadas passam normalmente
+Aberto : falha na hora, sem chamar o i-Educar
+MeioAberto : deixa passar 1 chamada de teste
+
+Fechado --> Aberto : 3 falhas em 2 min
+Aberto --> MeioAberto : depois de 30 s
+MeioAberto --> Fechado : teste deu certo
+MeioAberto --> Aberto : teste falhou
+@enduml

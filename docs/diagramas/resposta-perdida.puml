@@ -1,0 +1,19 @@
+@startuml resposta-perdida
+' cenario 3: Moodle cria o curso mas a resposta nao chega
+queue RabbitMQ as mq
+participant "plataforma-\naprendizagem" as pl
+participant Moodle as mo
+
+mq -> pl : curso.criar.v1 (turma 25)
+pl -> mo : busca idnumber ieducar-turma-25
+mo --> pl : nao existe
+pl -> mo : cria curso
+mo -> mo : curso 24 criado
+mo --x pl : resposta perdida
+pl -> mq : nack (volta para a fila)
+mq -> pl : curso.criar.v1 (turma 25) de novo
+pl -> mo : busca idnumber ieducar-turma-25
+mo --> pl : curso 24
+pl -> mq : curso.criado.v1 (cursoId 24, jaExistia true)
+note over pl, mo : nenhum curso duplicado
+@enduml
